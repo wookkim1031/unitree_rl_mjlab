@@ -20,6 +20,11 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 
 
+"""
+tryo turns this dataclass into a CLI. because env itself is a nested dataclass
+
+TrainConfig.from_task pulls the defaults from the registry
+"""
 @dataclass(frozen=True)
 class TrainConfig:
   env: ManagerBasedRlEnvCfg
@@ -62,6 +67,7 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   print(f"[INFO] Training with: device={device}, seed={seed}, rank={rank}")
 
   # Check if this is a tracking task by checking for motion command.
+  # Tracking tasks require -- motion-file velocity tasks don't
   is_tracking_task = "motion" in cfg.env.commands and isinstance(
     cfg.env.commands["motion"], MotionCommandCfg
   )
@@ -199,6 +205,9 @@ def main():
   import src.tasks
 
   all_tasks = list_tasks()
+
+  # task name against list_tasks() 
+  # tryo turns dataclass into CLI,because env is itself a nested dataclass, every field inside it becomes a flag automatically
   chosen_task, remaining_args = tyro.cli(
     tyro.extras.literal_type_from_choices(all_tasks),
     add_help=False,
