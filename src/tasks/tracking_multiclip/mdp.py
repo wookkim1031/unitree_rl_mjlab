@@ -15,7 +15,15 @@ import numpy as np
 import torch
  
 from mjlab.tasks.tracking.mdp import MotionCommand, MotionCommandCfg
-from mjlab.utils.torch import quat_rotate_inv
+# mjlab 1.2.0 renamed quat_rotate_inv -> quat_apply_inverse.
+# Same signature (quat, vec); aliased so the call sites below are unchanged.
+from mjlab.utils.lab_api.math import (
+  quat_apply,
+  quat_apply_inverse as quat_rotate_inv,
+  quat_inv,
+  quat_mul,
+  yaw_quat,
+)
  
  
 def quat_to_6d(q: torch.Tensor) -> torch.Tensor:
@@ -159,10 +167,19 @@ class MultiMotionCommand(MotionCommand):
   # Update
 
   def _update_command(self, env_ids=None):
-    """
-    Advance time, then hold at the clip's last frame.
-    Resampling there would teleport the reference mid-episode with no done
-    for the critic; holding plus a clip_timeout termination ends it cleanly.
+    """Advance time, then hold at the clip's last frame.
+
+    The base resamples when time_steps >= motion.time_step_total, which on a
+    merged buffer is the END OF THE WHOLE CONCATENATION, not of the current
+    clip. Clamping per clip is what keeps one env on one motion; the
+    clip_timeout termination then ends the episode cleanly, so the critic
+    gets a done instead of a teleporting reference.
+
+    mjlab 1.2.0 inlined update_relative_body_poses() into the base
+    _update_command, so the anchor-relative pose block below is reproduced
+    here. It must run AFTER the clamp: computing it from an unclamped
+    time_steps would read the next clip's frames for one step at every clip
+    boundary.
     """
     if env_ids is None:
       self.time_steps += 1
@@ -171,10 +188,25 @@ class MultiMotionCommand(MotionCommand):
     # In place: the base class and the viewer scrubber both write through
     # self.time_steps, so keep the same tensor object.
     self.time_steps.clamp_(max=self.clip_end)
-    self.update_relative_body_poses()
+
+    n_bodies = len(self.cfg.body_names)
+    anchor_pos_w_repeat = self.anchor_pos_w[:, None, :].repeat(1, n_bodies, 1)
+    anchor_quat_w_repeat = self.anchor_quat_w[:, None, :].repeat(1, n_bodies, 1)
+    robot_anchor_pos_w_repeat = self.robot_anchor_pos_w[:, None, :].repeat(
+      1, n_bodies, 1)
+    robot_anchor_quat_w_repeat = self.robot_anchor_quat_w[:, None, :].repeat(
+      1, n_bodies, 1)
+
+    delta_pos_w = robot_anchor_pos_w_repeat
+    delta_pos_w[..., 2] = anchor_pos_w_repeat[..., 2]
+    delta_ori_w = yaw_quat(
+      quat_mul(robot_anchor_quat_w_repeat, quat_inv(anchor_quat_w_repeat)))
+
+    self.body_quat_relative_w = quat_mul(delta_ori_w, self.body_quat_w)
+    self.body_pos_relative_w = delta_pos_w + quat_apply(
+      delta_ori_w, self.body_pos_w - anchor_pos_w_repeat)
 
   # extra observations
-
   def ref_root_vel_b(self) -> torch.Tensor:
     """(N, 6) reference anchor lin+ang velocity, in the ROBOT's base frame.
 
@@ -183,12 +215,10 @@ class MultiMotionCommand(MotionCommand):
     heading-invariant. Uses only the root QUATERNION, which the IMU provides
     on hardware.
     """
-    ai = self.motion_anchor_body_index
-    t = self.time_steps
     q = self.robot.data.root_link_quat_w
     return torch.cat([
-      quat_rotate_inv(q, self.motion.body_lin_vel_w[t, ai]),
-      quat_rotate_inv(q, self.motion.body_ang_vel_w[t, ai]),
+      quat_rotate_inv(q, self.anchor_lin_vel_w),
+      quat_rotate_inv(q, self.anchor_ang_vel_w),
     ], dim=-1)
 
   def lookahead_obs(self) -> torch.Tensor:

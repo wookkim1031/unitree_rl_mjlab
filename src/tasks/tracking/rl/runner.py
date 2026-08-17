@@ -108,7 +108,9 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
         "body_names": list(motion_term.cfg.body_names),
       }
     )
-    attach_metadata_to_onnx(os.path.join(policy_path, filename), metadata)
+    # disabled: protobuf EncodeError. The .onnx files are already
+    # written above; only metadata_props fails here.
+    print('[WARN] onnx metadata attach skipped', flush=True)
     if self.logger.logger_type in ["wandb"]:
       wandb.save(policy_path + filename, base_path=os.path.dirname(policy_path))
       if self.registry_name is not None:

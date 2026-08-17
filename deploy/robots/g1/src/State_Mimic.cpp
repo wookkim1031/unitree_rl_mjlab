@@ -1,4 +1,5 @@
 #include "State_Mimic.h"
+#include <array>
 #include "unitree_articulation.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
@@ -74,6 +75,64 @@ REGISTER_OBSERVATION(motion_anchor_ori_b)
     Eigen::Matrix<float, 6, 1> data;
     data << rot(0, 0), rot(0, 1), rot(1, 0), rot(1, 1), rot(2, 0), rot(2, 1);
     return std::vector<float>(data.data(), data.data() + data.size());
+}
+
+REGISTER_OBSERVATION(ref_root_vel)
+{
+    auto loader = State_Mimic::motion;
+    // Base frame here is the ROOT quaternion, not the torso — matching
+    // ref_root_vel_b() in mdp.py, which uses robot.data.root_link_quat_w.
+    Eigen::Quaternionf root_q = env->robot->data.root_quat_w;
+    Eigen::Matrix3f R_inv = root_q.toRotationMatrix().transpose();
+    Eigen::Matrix3f align = init_quat.toRotationMatrix();
+    
+    Eigen::Vector3f lin_b = R_inv * (align * loader->anchor_lin_vel());
+    Eigen::Vector3f ang_b = R_inv * (align * loader->anchor_ang_vel());
+    
+    std::vector<float> out;
+    out.reserve(6);
+    for (int i = 0; i < 3; i++) out.push_back(lin_b[i]);
+    for (int i = 0; i < 3; i++) out.push_back(ang_b[i]);
+    return out;
+}
+
+// Must match MultiClipSettings.lookahead used in training.
+static const std::array<int, 3> kLookahead = {5, 10, 20};
+
+REGISTER_OBSERVATION(ref_lookahead)
+{
+    auto loader = State_Mimic::motion;
+    Eigen::Quaternionf root_q = env->robot->data.root_quat_w;
+    Eigen::Matrix3f R_inv = root_q.toRotationMatrix().transpose();
+    Eigen::Matrix3f align = init_quat.toRotationMatrix();
+    
+    // lookahead_frame = "ref": the offset is measured from the reference
+    // anchor at the CURRENT frame, not from the robot's world position.
+    // That is what makes this term deployable — no root position needed.
+    const Eigen::Vector3f origin = loader->anchor_position(0);
+    
+    std::vector<float> out;
+    out.reserve(38 * kLookahead.size());
+    
+    for (int k : kLookahead)
+    {
+        // 3 — anchor position offset, robot base frame
+        Eigen::Vector3f d = R_inv * (align * (loader->anchor_position(k) - origin));
+        for (int i = 0; i < 3; i++) out.push_back(d[i]);
+    
+        // 6 — anchor orientation, first two columns read row-major, matching
+        //     motion_anchor_ori_b above and the training-time quat_to_6d.
+        Eigen::Matrix3f M =
+            (init_quat * loader->anchor_quaternion(k)).toRotationMatrix();
+        out.push_back(M(0,0)); out.push_back(M(0,1));
+        out.push_back(M(1,0)); out.push_back(M(1,1));
+        out.push_back(M(2,0)); out.push_back(M(2,1));
+    
+        // 29 — reference joint targets at that frame
+        Eigen::VectorXf q = loader->joint_pos_at(k);
+        for (int i = 0; i < q.size(); i++) out.push_back(q[i]);
+    }
+    return out;
 }
 
 }
