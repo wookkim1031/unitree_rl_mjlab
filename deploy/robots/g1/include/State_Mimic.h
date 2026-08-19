@@ -11,6 +11,7 @@ public:
 
     void enter();
     void run();
+
     void exit()
     {
         policy_thread_running = false;

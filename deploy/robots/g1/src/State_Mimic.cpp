@@ -3,6 +3,7 @@
 #include "unitree_articulation.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
+#include <sstream>
 
 static Eigen::Quaternionf init_quat;
 std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion = nullptr;
@@ -69,8 +70,8 @@ REGISTER_OBSERVATION(motion_anchor_ori_b)
     auto real_quat_w = robot_quat_w(env);
     auto ref_quat_w  = motion_anchor_quat_w(loader);
 
-    auto rot_ = (init_quat * ref_quat_w).conjugate() * real_quat_w;
-    auto rot = rot_.toRotationMatrix().transpose();
+    Eigen::Quaternionf rot_ = (init_quat * ref_quat_w).conjugate() * real_quat_w;
+    Eigen::Matrix3f    rot  = rot_.toRotationMatrix().transpose();
 
     Eigen::Matrix<float, 6, 1> data;
     data << rot(0, 0), rot(0, 1), rot(1, 0), rot(1, 1), rot(2, 0), rot(2, 1);
@@ -213,16 +214,35 @@ void State_Mimic::enter()
         using clock = std::chrono::high_resolution_clock;
         const std::chrono::duration<double> desiredDuration(env->step_dt);
         const auto dt = std::chrono::duration_cast<clock::duration>(desiredDuration);
-
-        // Initialize timing
         const auto start = clock::now();
         auto sleepTill = start + dt;
-
+    
+        env->robot->update();                 // <-- ADD: populate root_quat_w first
         motion->reset(env->robot->data, time_range_[0]);
-        auto ref_yaw = isaaclab::yawQuaternion(motion->root_quaternion()).toRotationMatrix();
+    
+        auto dump = [](const char* tag, const auto& v) {
+            std::stringstream ss;
+            ss << v.transpose();
+            spdlog::info("{}: {}", tag, ss.str());
+        };
+        dump("root_quat_w",   env->robot->data.root_quat_w.coeffs());
+        dump("robot_quat_w",  robot_quat_w(env.get()).coeffs());
+        dump("ref root_quat", motion->root_quaternion().coeffs());
+    
+        auto ref_yaw = isaaclab::yawQuaternion(motion_anchor_quat_w(motion)).toRotationMatrix();
         auto robot_yaw = isaaclab::yawQuaternion(robot_quat_w(env.get())).toRotationMatrix();
         init_quat = robot_yaw * ref_yaw.transpose();
+    
+        dump("init_quat", init_quat.coeffs());
+        spdlog::info("joint_ids_map.size() = {}", env->robot->data.joint_ids_map.size());
+        spdlog::info("init_quat finite = {}", init_quat.coeffs().allFinite());
+        if (!init_quat.coeffs().allFinite()) {
+            spdlog::error("init_quat non-finite — aborting");
+            std::abort();
+        }
+    
         env->reset();
+        
 
         while (policy_thread_running)
         {
@@ -244,4 +264,13 @@ void State_Mimic::run()
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
+    static int n = 0;
+    if (n < 3) {
+        spdlog::info("run() call {}: action[0]={} action[25]={} -> readback q[0]={} q[25]={}",
+                     n, action[0], action[25],
+                     lowcmd->msg_.motor_cmd()[0].q(),
+                     lowcmd->msg_.motor_cmd()[25].q());
+        n++;
+    }
+
 }

@@ -6,6 +6,7 @@
 #include "isaaclab/envs/manager_based_rl_env.h"
 #include "isaaclab/manager/manager_term_cfg.h"
 #include <numeric>
+#include <algorithm>
 
 namespace isaaclab
 {
@@ -77,12 +78,19 @@ public:
 
     void process_action(std::vector<float> action)
     {
-        for (auto & a : action) a = std::clamp(a, -1.0f, 1.0f);   // add this line
+        static int n = 0;
+        if (n < 10) {
+            printf("[act %d] ", n);
+            for (float a : action) printf("%.3f ", a);
+            printf("\n"); fflush(stdout);
+            n++;
+        }
         _action = action;
         int idx = 0;
-        for(auto & term : _terms)
+        for (auto & term : _terms)
         {
-            auto term_action = std::vector<float>(action.begin() + idx, action.begin() + idx + term->action_dim());
+            auto term_action = std::vector<float>(action.begin() + idx,
+                                                  action.begin() + idx + term->action_dim());
             term->process_actions(term_action);
             idx += term->action_dim();
         }

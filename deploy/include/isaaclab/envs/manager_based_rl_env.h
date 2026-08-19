@@ -11,6 +11,8 @@
 #include "isaaclab/algorithms/algorithms.h"
 #include <iostream>
 #include "isaaclab/utils/utils.h"
+#include <fstream>
+#include <iomanip>
 
 namespace isaaclab
 {
@@ -61,6 +63,17 @@ public:
         episode_length += 1;
         robot->update();
         auto obs = observation_manager->compute();
+        static bool dumped = false;
+        if (!dumped) {
+            dumped = true;
+            for (const auto& [name, vec] : obs) {
+                std::ofstream f("/tmp/obs_cpp_" + name + ".txt");
+                f << std::setprecision(9);
+                for (float v : vec) f << v << "\n";
+                std::cerr << "[obs dump] group '" << name << "': "
+                          << vec.size() << " values\n";
+            }
+        }
         auto action = alg->act(obs);
         action_manager->process_action(action);
     }

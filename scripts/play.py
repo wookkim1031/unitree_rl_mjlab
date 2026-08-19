@@ -158,6 +158,17 @@ def run_play(task_id: str, cfg: PlayConfig):
       str(resume_path), load_cfg={"actor": True}, strict=True, map_location=device
     )
     policy = runner.get_inference_policy(device=device)
+    _inner, _n = policy, [0]
+    def policy(obs, *a, **k):
+        if _n[0] == 0:
+            import numpy as np
+            arr = obs["actor"][0].detach().cpu().numpy()
+            np.savetxt("/tmp/obs_mjlab.txt", arr, fmt="%.9f")
+            mc = env.unwrapped.command_manager.get_term("motion")
+            print(f"[obs dump] wrote {arr.size} values, "
+                  f"start frame {int(mc.time_steps[0])}", flush=True)
+        _n[0] += 1
+        return _inner(obs, *a, **k)
 
   # Handle "auto" viewer selection.
   if cfg.viewer == "auto":
